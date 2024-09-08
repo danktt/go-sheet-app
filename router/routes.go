@@ -1,7 +1,7 @@
 package routes
 
 import (
-	"go-sheet/handlers"
+	handlers "go-sheet/handlers/expenses"
 
 	"github.com/gin-gonic/gin"
 )
