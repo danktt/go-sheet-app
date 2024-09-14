@@ -1,181 +1,222 @@
 package handlers
 
 import (
+	"database/sql"
 	"go-sheet/db"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
-type Expenses struct {
-	ID          string  `json:"uuid"`
-	Created_at  string  `json:"createdAt"`
-	Updated_at  string  `json:"updatedAt"`
-	Description string  `json:"description"`
-	Planned     float64 `json:"planned"`
-	Spent       float64 `json:"spent"`
-	Difference  float64 `json:"difference"`
-	Category    string  `json:"category"`
-	Paid_at     *string `json:"paidAt"`
-	Paid_by     string  `json:"paidBy"`
+type MonthlyExpense struct {
+	CategoryID     string  `json:"categoryId" binding:"required"`
+	ReferenceMonth string  `json:"referenceMonth" binding:"required"`
+	PaidId         string  `json:"paidId" binding:"required"`
+	SpentAmount    float64 `json:"spentAmount" binding:"required"`
+	PaymentDate    string  `json:"paymentDate" binding:"required"`
+	File           string  `json:"file"`
 }
 
-func CreateExpense(ctx *gin.Context) {
-	var expense Expenses
+// Update the MonthlyExpenseResponse struct
+type MonthlyExpenseResponse struct {
+	ExpenseID      string   `json:"expenseId"`
+	CategoryName   string   `json:"categoryName"`
+	ReferenceMonth *string  `json:"referenceMonth"` // colocar * significa que o campo é opcional
+	SpentAmount    *float64 `json:"spentAmount"`
+	PlannedAmount  float64  `json:"plannedAmount"`
+	Difference     *float64 `json:"difference"`
+	PaymentDate    *string  `json:"paymentDate"`
+	File           *string  `json:"file"`
+	PaidId         *string  `json:"paidId"`
+	PaidType       *string  `json:"paidType"`  // Add this field
+	PaidColor      *string  `json:"paidColor"` // Change this to a pointer
+	StatusId       *string  `json:"statusId"`
+	StatusName     *string  `json:"statusName"`
+	Description    *string  `json:"description"`
+}
 
-	if err := ctx.ShouldBindJSON(&expense); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"message": "Invalid request body",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	expense.ID = uuid.NewString()
-	currentTime := time.Now().Format("2006-01-02 15:04:05")
-	expense.Created_at = currentTime
-	expense.Updated_at = currentTime
-	expense.Difference = expense.Planned - expense.Spent
+// ListMonthlyExpenses retrieves all monthly expenses with category details
+func ListMonthlyExpenses(ctx *gin.Context) {
 
 	conn, err := db.OpenConnection()
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Error connecting to database",
-			"error":   err.Error(),
-		})
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to connect to database"})
 		return
 	}
 	defer conn.Close()
 
-	sql := `INSERT INTO expenses (id, created_at, updated_at, description, planned, spent, difference, category, paid_at, paid_by) 
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+	// Update the query in the ListMonthlyExpenses function
+	query := `
+		SELECT 
+			me.expense_id,
+			c.category_name,
+			me.reference_month,
+			me.spent_amount,
+			me.amount_planned,
+			(me.amount_planned - me.spent_amount) AS difference,
+			me.payment_date,
+			me.file,
+			pt.paid_id,
+			pt.paid_type AS paid_type,
+			pt.paid_color AS paid_color,
+			st.status_id AS status_id,
+			st.status_name AS status_name,
+			me.description AS description
+		FROM 
+			monthly_expenses me
+		JOIN 
+			categories c ON me.category_id = c.category_id
+		LEFT JOIN
+			paid_type pt ON me.paid_id::text = pt.paid_id::text
+		LEFT JOIN
+			status st ON me.status_id::text = st.status_id::text
+		ORDER BY 
+			me.reference_month DESC;
+	`
 
-	_, err = conn.Exec(sql, expense.ID, expense.Created_at, expense.Updated_at, expense.Description, expense.Planned, expense.Spent, expense.Difference, expense.Category, expense.Paid_at, expense.Paid_by)
-
+	rows, err := conn.Query(query)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Error inserting data into database",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	ctx.JSON(http.StatusCreated, gin.H{
-		"message": "Successfully created expense",
-		"expense": expense,
-	})
-}
-
-func ShowExpense(ctx *gin.Context) {
-	ctx.JSON(200, gin.H{
-		"message": "Successfully created expense",
-	})
-	ctx.AbortWithStatus(200)
-}
-
-func DeleteExpense(ctx *gin.Context) {
-	ctx.JSON(200, gin.H{
-		"message": "Successfully delete expense",
-	})
-	ctx.AbortWithStatus(200)
-}
-
-func UpdateExpense(ctx *gin.Context) {
-	ctx.JSON(200, gin.H{
-		"message": "Successfully update expense",
-	})
-	ctx.AbortWithStatus(200)
-}
-
-func ListExpenses(ctx *gin.Context) {
-	// Parâmetros de paginação
-	page := ctx.DefaultQuery("page", "1")
-	limit := ctx.DefaultQuery("limit", "10")
-
-	// Converter para inteiros
-	pageInt, _ := strconv.Atoi(page)
-	limitInt, _ := strconv.Atoi(limit)
-
-	// Calcular o offset
-	offset := (pageInt - 1) * limitInt
-
-	conn, err := db.OpenConnection()
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Error connecting to database",
-			"error":   err.Error(),
-		})
-		return
-	}
-	defer conn.Close()
-
-	// Consulta paginada
-	rows, err := conn.Query("SELECT * FROM expenses ORDER BY created_at DESC LIMIT $1 OFFSET $2", limitInt, offset)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Error querying database",
-			"error":   err.Error(),
-		})
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to query expenses", "details": err.Error()})
 		return
 	}
 	defer rows.Close()
 
-	var expenses []Expenses
+	var expenses []MonthlyExpenseResponse
 
 	for rows.Next() {
-		var expense Expenses
+		var expense MonthlyExpenseResponse
+		var spentAmount, difference sql.NullFloat64
+		var paymentDate, file, paidId, paidType, paidColor sql.NullString
+		var referenceMonth sql.NullTime // Mudança aqui
+		var statusId, statusName, description sql.NullString
 		err := rows.Scan(
-			&expense.ID,
-			&expense.Created_at,
-			&expense.Updated_at,
-			&expense.Description,
-			&expense.Planned,
-			&expense.Spent,
-			&expense.Difference,
-			&expense.Category,
-			&expense.Paid_at,
-			&expense.Paid_by,
+			&expense.ExpenseID,
+			&expense.CategoryName,
+			&referenceMonth,
+			&spentAmount,
+			&expense.PlannedAmount,
+			&difference,
+			&paymentDate,
+			&file,
+			&paidId,
+			&paidType,
+			&paidColor,
+			&statusId,
+			&statusName,
+			&description,
 		)
 		if err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{
-				"message": "Error scanning database result",
-				"error":   err.Error(),
-			})
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to scan row", "details": err.Error()})
 			return
 		}
+
+		if spentAmount.Valid {
+			expense.SpentAmount = &spentAmount.Float64
+		}
+		if difference.Valid {
+			expense.Difference = &difference.Float64
+		}
+		if paymentDate.Valid {
+			expense.PaymentDate = &paymentDate.String
+		}
+		if file.Valid {
+			expense.File = &file.String
+		}
+		if paidId.Valid {
+			expense.PaidId = &paidId.String
+		}
+		if paidType.Valid {
+			expense.PaidType = &paidType.String
+		}
+		if paidColor.Valid {
+			expense.PaidColor = &paidColor.String
+		}
+		if statusId.Valid {
+			expense.StatusId = &statusId.String
+		}
+		if statusName.Valid {
+			expense.StatusName = &statusName.String
+		}
+		if description.Valid {
+			expense.Description = &description.String
+		}
+
+		if referenceMonth.Valid {
+			formattedDate := referenceMonth.Time.Format("2006-01-02")
+			expense.ReferenceMonth = &formattedDate
+		}
+
 		expenses = append(expenses, expense)
 	}
 
 	if err := rows.Err(); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Error after scanning database results",
-			"error":   err.Error(),
-		})
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to iterate over rows", "details": err.Error()})
 		return
 	}
-
-	// Contar o total de registros
-	var total int
-	err = conn.QueryRow("SELECT COUNT(*) FROM expenses").Scan(&total)
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"message": "Error counting total records",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	// Calcular o total de páginas
-	totalPages := (total + limitInt - 1) / limitInt
 
 	ctx.JSON(http.StatusOK, gin.H{
-		"data":        expenses,
-		"currentPage": pageInt,
-		"perPage":     limitInt,
-		"total":       total,
-		"totalPages":  totalPages,
+		"status":   "success",
+		"message":  "Expenses retrieved successfully",
+		"expenses": expenses,
+	})
+}
+
+// CreateExpense inserts a new monthly expense into the database
+func CreateExpense(ctx *gin.Context) {
+	var expense MonthlyExpense
+
+	// Bind the JSON received to the MonthlyExpense struct
+	if err := ctx.ShouldBindJSON(&expense); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "status": "error"})
+		return
+	}
+
+	conn, err := db.OpenConnection()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to connect to database", "status": "error"})
+		return
+	}
+	defer conn.Close()
+
+	// Validate and convert the dates
+	refMonth, err := time.Parse("2006-01-02", expense.ReferenceMonth)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid reference month format. Use YYYY-MM-DD", "status": "error"})
+		return
+	}
+
+	payDate, err := time.Parse("2006-01-02", expense.PaymentDate)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payment date format. Use YYYY-MM-DD", "status": "error"})
+		return
+	}
+
+	// Fetch amount_planned from the categories table to insert it into the monthly_expenses
+	var amountPlanned float64
+	err = conn.QueryRow(`SELECT amount_planned FROM categories WHERE category_id = $1`, expense.CategoryID).Scan(&amountPlanned)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve planned amount for the category", "status": "error"})
+		return
+	}
+
+	// Generate a UUID for the new expense
+	newUUID := uuid.New()
+
+	// Insert into the monthly_expenses table
+	sqlQuery := `INSERT INTO monthly_expenses (expense_id, category_id, reference_month, spent_amount, amount_planned, payment_date, paid_id, file) 
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	_, err = conn.Exec(sqlQuery, newUUID, expense.CategoryID, refMonth, expense.SpentAmount, amountPlanned, payDate, expense.PaidId, expense.File)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to insert expense", "status": "error"})
+		return
+	}
+
+	// Return success with the generated UUID
+	ctx.JSON(http.StatusOK, gin.H{
+		"message":    "Expense created successfully",
+		"expense_id": newUUID,
+		"status":     "success",
 	})
 }
